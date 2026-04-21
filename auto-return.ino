@@ -13,10 +13,12 @@ TinyGPSPlus gps;
 HardwareSerial GPS_Serial(2);
 
 // --- Motor Pins ---
+#define ENA 32  // <-- NEW: Connect to ENA on motor driver (remove jumper)
 #define IN1 25
 #define IN2 26
 #define IN3 27
 #define IN4 14
+#define ENB 33  // <-- NEW: Connect to ENB on motor driver (remove jumper)
 
 // --- Autonomous Variables ---
 const float BATTERY_CAPACITY_MAH = 3000.0;
@@ -34,6 +36,7 @@ double bearing_to_home = 0.0;
 
 int sys_state = 0; 
 bool manual_rtb_override = false; 
+int current_speed = 255; // <-- NEW: Global speed variable (0-255)
 
 // --- The Dashboard HTML ---
 const char index_html[] PROGMEM = R"rawliteral(
@@ -86,10 +89,17 @@ const char index_html[] PROGMEM = R"rawliteral(
         .btn-left { grid-column: 1; grid-row: 2; }
         .btn-right { grid-column: 3; grid-row: 2; }
         .btn-down { grid-column: 2; grid-row: 3; }
+        
+        /* --- NEW: THROTTLE SLIDER --- */
+        .slider-container { margin-top: 15px; margin-bottom: 10px; }
+        .slider { -webkit-appearance: none; width: 100%; height: 6px; background: #222; border-radius: 3px; outline: none; margin-top: 8px; box-shadow: inset 0 0 5px rgba(0,0,0,0.8); }
+        .slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--safe); cursor: pointer; box-shadow: 0 0 10px var(--safe); transition: transform 0.1s; }
+        .slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
+
         .rtb-btn { background: transparent; border: 2px solid var(--crit); color: var(--crit); padding: 8px; font-family: 'Orbitron'; font-weight: bold; border-radius: 5px; cursor: pointer; text-transform: uppercase; margin-top: auto; transition: 0.3s; }
         .rtb-active { background: var(--crit); color: #000; box-shadow: 0 0 15px var(--crit); }
 
-        /* --- NEW: COMPASS WIDGET --- */
+        /* Compass Widget */
         .compass-wrapper { position: relative; width: 100px; height: 100px; margin: 0 auto 15px; }
         .compass-dial { width: 100%; height: 100%; border-radius: 50%; border: 2px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.6); position: relative; transition: transform 0.15s linear; box-shadow: inset 0 0 20px rgba(0,255,204,0.1); }
         .compass-mark { position: absolute; font-size: 0.7rem; font-weight: bold; color: var(--dim); }
@@ -99,7 +109,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         .mark-w { top: 50%; left: 4px; transform: translateY(-50%); }
         .compass-arrow { position: absolute; top: -5px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 12px solid var(--crit); z-index: 10; filter: drop-shadow(0 0 4px var(--crit)); }
         
-        /* --- NEW: 3D CUBE MPU6050 --- */
+        /* 3D CUBE MPU6050 */
         .scene { width: 80px; height: 80px; perspective: 400px; margin: 15px auto 25px; }
         .cube { width: 100%; height: 100%; position: relative; transform-style: preserve-3d; transition: transform 0.1s linear; }
         .cube-face { position: absolute; width: 80px; height: 80px; border: 1px solid rgba(0,255,204,0.6); background: rgba(0,255,204,0.05); display: flex; align-items: center; justify-content: center; font-size: 0.6rem; font-weight: bold; color: var(--safe); box-shadow: inset 0 0 15px rgba(0,255,204,0.15); }
@@ -107,7 +117,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         .face-right  { transform: rotateY( 90deg) translateZ(40px); }
         .face-back   { transform: rotateY(180deg) translateZ(40px); }
         .face-left   { transform: rotateY(-90deg) translateZ(40px); }
-        .face-top    { transform: rotateX( 90deg) translateZ(40px); border-color: rgba(255,0,51,0.6); color: var(--crit); } /* Top distinguished */
+        .face-top    { transform: rotateX( 90deg) translateZ(40px); border-color: rgba(255,0,51,0.6); color: var(--crit); } 
         .face-bottom { transform: rotateX(-90deg) translateZ(40px); }
 
         #map { flex: 1; width: 100%; border-radius: 5px; border: 1px solid #444; background: #222; }
@@ -115,7 +125,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 </head>
 <body>
     <div class="header">
-        <div style="font-size: 1.5rem; font-weight: bold;">A.R.E.S. OS <span style="font-size:0.8rem; color:var(--safe);">v2.4 ADVANCED</span></div>
+        <div style="font-size: 1.5rem; font-weight: bold;">A.R.E.S. OS <span style="font-size:0.8rem; color:var(--safe);">v2.5 ADVANCED</span></div>
         <div id="sys-state">MANUAL SAFE</div>
     </div>
     <div class="dashboard">
@@ -131,6 +141,12 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <div class="btn btn-down" onmousedown="drive('B')" onmouseup="drive('S')" ontouchstart="drive('B')" ontouchend="drive('S')">&#9660;</div>
                 </div>
             </div>
+            
+            <div class="slider-container">
+                <div class="data-row" style="border:none; padding-bottom:0;"><span class="data-label">Throttle</span><span id="speed-val" style="color:var(--safe); font-weight:bold;">100%</span></div>
+                <input type="range" min="0" max="255" value="255" class="slider" id="speed-slider" onchange="setSpeed(this.value)" oninput="document.getElementById('speed-val').innerText = Math.round((this.value/255)*100) + '%'">
+            </div>
+
             <button id="rtb-toggle" class="rtb-btn" onclick="toggleRTB()">FORCE RTB</button>
         </div>
 
@@ -206,6 +222,8 @@ const char index_html[] PROGMEM = R"rawliteral(
         var mapLockedToRover = false;
 
         function drive(cmd) { fetch('/control?cmd=' + cmd); }
+        function setSpeed(val) { fetch('/speed?val=' + val); } // <-- NEW: JS Fetch Call for Speed
+
         function toggleRTB() {
             fetch('/toggle_rtb').then(r => r.text()).then(state => {
                 let btn = document.getElementById('rtb-toggle');
@@ -216,7 +234,6 @@ const char index_html[] PROGMEM = R"rawliteral(
 
         setInterval(() => {
             fetch('/data').then(r => r.json()).then(d => {
-                // Systems & Logistics
                 document.getElementById('batt-pct').innerText = d.batt_pct;
                 document.getElementById('batt-bar').style.width = d.batt_pct + '%';
                 document.getElementById('current').innerText = d.amps.toFixed(2) + ' A';
@@ -227,18 +244,14 @@ const char index_html[] PROGMEM = R"rawliteral(
                 document.getElementById('radius-bar').style.width = Math.min((d.dist_home / d.max_radius) * 100, 100) + '%';
                 document.getElementById('gps-sats').innerText = d.sats + ' Sats';
 
-                // --- SPATIAL DYNAMICS ANIMATION ---
-                // Compass Rotation (Counter-rotate the dial against the heading)
                 document.getElementById('compass-dial').style.transform = `rotate(${-d.heading}deg)`;
                 document.getElementById('val-heading').innerText = d.heading;
 
-                // 3D Cube Rotation (CSS Euler Angles)
                 document.getElementById('mpu-cube').style.transform = `rotateX(${d.pitch}deg) rotateY(${d.yaw}deg) rotateZ(${d.roll}deg)`;
                 document.getElementById('val-roll').innerText = d.roll;
                 document.getElementById('val-pitch').innerText = d.pitch;
                 document.getElementById('val-yaw').innerText = d.yaw;
 
-                // GNSS Map Updates
                 if(d.cur_lat !== 0.0 && d.cur_lon !== 0.0) {
                     let latlng = [d.cur_lat, d.cur_lon];
                     roverMarker.setLatLng(latlng);
@@ -252,7 +265,6 @@ const char index_html[] PROGMEM = R"rawliteral(
                     }
                 }
 
-                // Status State
                 let stateEl = document.getElementById('sys-state');
                 let modeEl = document.getElementById('nav-mode');
                 if(d.sys_state === 2) {
@@ -266,7 +278,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                     modeEl.innerText = "MANUAL"; modeEl.style.color = "var(--safe)";
                 }
             });
-        }, 100); // Increased polling to 10Hz (100ms) for smooth IMU/Compass animation
+        }, 100); 
     </script>
 </body>
 </html>
@@ -276,8 +288,13 @@ void setup() {
   Serial.begin(115200);
   GPS_Serial.begin(9600, SERIAL_8N1, 16, 17);
 
+  // --- NEW: Setup Motor Pins including ENA/ENB ---
+  pinMode(ENA, OUTPUT); pinMode(ENB, OUTPUT);
   pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
   pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT);
+  
+  analogWrite(ENA, current_speed); 
+  analogWrite(ENB, current_speed);
   stopMotors();
 
   WiFi.softAP(ssid, password);
@@ -289,6 +306,16 @@ void setup() {
         if (cmd == "F") driveForward(); else if (cmd == "B") driveBackward();
         else if (cmd == "L") turnLeft(); else if (cmd == "R") turnRight();
         else if (cmd == "S") stopMotors();
+    }
+    server.send(200, "text/plain", "OK");
+  });
+
+  // --- NEW: Speed Control Endpoint ---
+  server.on("/speed", HTTP_GET, []() {
+    if(server.hasArg("val")) {
+        current_speed = server.arg("val").toInt();
+        analogWrite(ENA, current_speed); // Apply live speed update to Left Motors
+        analogWrite(ENB, current_speed); // Apply live speed update to Right Motors
     }
     server.send(200, "text/plain", "OK");
   });
@@ -323,9 +350,11 @@ void loop() {
 
 void executeAutoReturn() {
   if (dist_to_home < 3.0) { stopMotors(); manual_rtb_override = false; return; }
-  float current_heading = 0.0; // Needs Magnetometer logic
+  float current_heading = 0.0; 
   float heading_error = bearing_to_home - current_heading;
   if (heading_error > 180) heading_error -= 360; if (heading_error < -180) heading_error += 360;
+  
+  // Optional: Set a specific autonomous speed here by writing to ENA/ENB temporarily
   if (heading_error > 15) turnRight(); else if (heading_error < -15) turnLeft(); else driveForward(); 
 }
 
@@ -336,10 +365,8 @@ void turnLeft() { digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH); digitalWrite(
 void stopMotors() { digitalWrite(IN1, LOW); digitalWrite(IN2, LOW); digitalWrite(IN3, LOW); digitalWrite(IN4, LOW); }
 
 void handleDataUpdate() {
-  // --- HARDWARE PLACEHOLDERS ---
   float volts = 7.4; float amps = 1.5; int batt_pct = 85; 
   
-  // Simulated IMU & Mag Data (Replace with actual Wire.h sensor reads)
   int sim_heading = millis() / 50 % 360; 
   int sim_roll = (millis() / 30 % 40) - 20; 
   int sim_pitch = (millis() / 40 % 30) - 15;
@@ -366,13 +393,11 @@ void handleDataUpdate() {
   json += "\"sys_state\":" + String(sys_state) + ",";
   json += "\"manual_rtb\":" + String(manual_rtb_override ? 1 : 0) + ",";
   
-  // Spatial Data
   json += "\"heading\":" + String(sim_heading) + ",";
   json += "\"roll\":" + String(sim_roll) + ",";
   json += "\"pitch\":" + String(sim_pitch) + ",";
   json += "\"yaw\":" + String(sim_yaw) + ",";
 
-  // GNSS Data
   json += "\"sats\":" + String(gps.satellites.value()) + ",";
   json += "\"cur_lat\":" + String(current_lat, 6) + ",";
   json += "\"cur_lon\":" + String(current_lon, 6) + ",";
