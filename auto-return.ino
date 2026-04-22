@@ -135,128 +135,238 @@ const char index_html[] PROGMEM = R"rawliteral(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>A.R.E.S. Command</title>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+    <title>A.R.E.S. UNIT 01 HUD</title>
+    <link href="https://fonts.googleapis.com/css2?family=Syncopate:wght@700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
-        :root { --bg: #050505; --panel: rgba(17, 17, 17, 0.85); --safe: #00ffcc; --warn: #ffcc00; --crit: #ff0033; --text: #fff; --dim: #666; }
-        body { margin: 0; padding: 15px; background-color: var(--bg); background-image: linear-gradient(rgba(0, 255, 204, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 255, 204, 0.03) 1px, transparent 1px); background-size: 30px 30px; color: var(--text); font-family: 'Orbitron', sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-        .header { display: flex; justify-content: space-between; padding-bottom: 10px; border-bottom: 2px solid var(--dim); margin-bottom: 15px; }
-         #sys-state { font-weight: bold; padding: 5px 15px; border-radius: 4px; border: 1px solid var(--safe); color: var(--safe); backdrop-filter: blur(5px); }
-        .sys-state-warn { border-color: var(--warn) !important; color: var(--warn) !important; animation: pulse 1s infinite; }
-        .sys-state-crit { border-color: var(--crit) !important; background: var(--crit) !important; color: #000 !important; animation: blink 0.5s infinite; }
-        @keyframes pulse { 50% { opacity: 0.7; } }
-        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-        .dashboard { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; flex: 1; min-height: 0; }
-        .panel { background: var(--panel); border: 1px solid #333; border-radius: 8px; padding: 15px; display: flex; flex-direction: column; overflow: hidden; backdrop-filter: blur(10px); }
-        .panel h2 { margin: 0 0 15px 0; font-size: 0.85rem; color: var(--safe); text-transform: uppercase; }
-        .big-data { font-size: 1.8rem; font-weight: bold; }
-        .unit { font-size: 0.8rem; color: var(--dim); }
-        .data-row { display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding: 6px 0; font-size: 0.85rem; }
-        .data-label { color: var(--dim); }
-        .prog-bg { width: 100%; height: 6px; background: #222; border-radius: 3px; overflow: hidden; }
-        .prog-fill { height: 100%; background: var(--safe); transition: width 0.5s; }
-        .d-pad-container { display: flex; justify-content: center; align-items: center; flex: 1; }
-        .d-pad { display: grid; grid-template-columns: repeat(3, 50px); grid-template-rows: repeat(3, 50px); gap: 5px; }
-        .btn { background: #222; border: 1px solid #444; border-radius: 8px; color: var(--safe); font-size: 1.2rem; display: flex; justify-content: center; align-items: center; cursor: pointer; }
-        .btn:active { background: var(--safe); color: #000; }
-        .btn-up { grid-column: 2; grid-row: 1; }
-        .btn-left { grid-column: 1; grid-row: 2; }
-        .btn-right { grid-column: 3; grid-row: 2; }
-        .btn-down { grid-column: 2; grid-row: 3; }
-        .slider { -webkit-appearance: none; width: 100%; height: 6px; background: #222; border-radius: 3px; outline: none; margin-top: 8px; }
-        .slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--safe); cursor: pointer; box-shadow: 0 0 10px var(--safe); }
-        .rtb-btn { background: transparent; border: 2px solid var(--crit); color: var(--crit); padding: 8px; font-family: 'Orbitron'; font-weight: bold; border-radius: 5px; cursor: pointer; margin-top: auto; }
-        .rtb-active { background: var(--crit); color: #000; }
-        .compass-wrapper { position: relative; width: 100px; height: 100px; margin: 0 auto 15px; }
-        .compass-dial { width: 100%; height: 100%; border-radius: 50%; border: 2px solid rgba(255,255,255,0.1); position: relative; transition: transform 0.15s linear; }
-        .compass-mark { position: absolute; font-size: 0.7rem; font-weight: bold; color: var(--dim); }
-        .mark-n { top: 2px; left: 50%; transform: translateX(-50%); color: var(--safe); }
-        .compass-arrow { position: absolute; top: -5px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 12px solid var(--crit); z-index: 10; }
-        .scene { width: 80px; height: 80px; perspective: 400px; margin: 15px auto 25px; }
-        .cube { width: 100%; height: 100%; position: relative; transform-style: preserve-3d; transition: transform 0.1s linear; }
-        .cube-face { position: absolute; width: 80px; height: 80px; border: 1px solid rgba(0,255,204,0.6); background: rgba(0,255,204,0.05); display: flex; align-items: center; justify-content: center; font-size: 0.6rem; color: var(--safe); }
-        .face-front { transform: rotateY(0deg) translateZ(40px); }
-        .face-back { transform: rotateY(180deg) translateZ(40px); }
-        .face-right { transform: rotateY(90deg) translateZ(40px); }
-        .face-left { transform: rotateY(-90deg) translateZ(40px); }
-        .face-top { transform: rotateX(90deg) translateZ(40px); border-color: var(--crit); color: var(--crit); }
-        .face-bottom { transform: rotateX(-90deg) translateZ(40px); }
-         #map { flex: 1; width: 100%; border-radius: 5px; border: 1px solid #444; background: #222; }
+        :root {
+            --neon-blue: #00f2ff;
+            --neon-red: #ff3131;
+            --bg-dark: #020406;
+            --panel-bg: rgba(0, 20, 35, 0.8);
+            --font-main: 'Share Tech Mono', monospace;
+        }
+
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body {
+            margin: 0; background-color: var(--bg-dark); color: var(--neon-blue);
+            font-family: var(--font-main); height: 100vh; overflow: hidden;
+            display: flex; flex-direction: column;
+            background-image: radial-gradient(circle at center, #001a2a 0%, #020406 100%);
+        }
+
+        /* Tactical CRT Overlay */
+        body::before {
+            content: " "; display: block; position: absolute; top: 0; left: 0; bottom: 0; right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.2) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            z-index: 50; background-size: 100% 3px, 3px 100%; pointer-events: none; opacity: 0.7;
+        }
+
+        .header {
+            padding: 8px 25px; display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 2px solid var(--neon-blue); background: rgba(0, 242, 255, 0.05);
+            box-shadow: 0 0 20px rgba(0, 242, 255, 0.15);
+        }
+        .sys-tag { font-family: 'Syncopate', sans-serif; font-size: 1rem; letter-spacing: 2px; }
+
+        .dashboard {
+            display: grid; grid-template-columns: 320px 1fr 340px; grid-template-rows: 1fr 140px;
+            gap: 12px; padding: 12px; flex: 1; min-height: 0;
+        }
+
+        .panel {
+            background: var(--panel-bg); border: 1px solid rgba(0, 242, 255, 0.3);
+            display: flex; flex-direction: column; position: relative; border-radius: 4px;
+            backdrop-filter: blur(5px); transition: border-color 0.5s ease;
+        }
+        .panel-h {
+            background: rgba(0, 242, 255, 0.15); padding: 4px 10px; font-size: 0.75rem;
+            letter-spacing: 1px; display: flex; justify-content: space-between; font-weight: bold;
+        }
+
+        /* --- DRONE HORIZON (MPU AXIS) --- */
+        .attitude-container {
+            width: 160px; height: 160px; border-radius: 50%; border: 2px solid var(--neon-blue);
+            margin: 15px auto; position: relative; overflow: hidden; background: #000;
+        }
+        .horizon-inner {
+            position: absolute; width: 400px; height: 400px; left: -120px; top: -120px;
+            background: linear-gradient(to bottom, #1a4d70 49.5%, #fff 50%, #4a2f1a 50.5%);
+            transition: transform 0.1s linear;
+        }
+        .crosshair {
+            position: absolute; width: 60px; height: 2px; background: var(--neon-red);
+            top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 10;
+        }
+
+        /* --- COMPASS (MAG AXIS) --- */
+        .compass-box { position: relative; height: 160px; display: flex; justify-content: center; align-items: center; }
+        .compass-dial {
+            width: 140px; height: 140px; border-radius: 50%; border: 1px dashed var(--neon-blue);
+            position: relative; transition: transform 0.2s cubic-bezier(0, 0, 0, 1);
+        }
+        .cardinal { position: absolute; font-weight: bold; font-size: 0.8rem; }
+        .N { top: 5px; left: 50%; transform: translateX(-50%); color: var(--neon-red); }
+        .S { bottom: 5px; left: 50%; transform: translateX(-50%); }
+        .E { right: 8px; top: 50%; transform: translateY(-50%); }
+        .W { left: 8px; top: 50%; transform: translateY(-50%); }
+
+        /* --- CONTROLS --- */
+        .controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 15px; margin: auto; }
+        .joy-btn {
+            width: 55px; height: 55px; border: 1px solid var(--neon-blue);
+            background: rgba(0, 242, 255, 0.05); color: var(--neon-blue);
+            display: flex; align-items: center; justify-content: center;
+            border-radius: 6px; font-size: 1.2rem; cursor: pointer; transition: 0.15s;
+        }
+        .joy-btn:active { background: var(--neon-blue); color: #000; box-shadow: 0 0 15px var(--neon-blue); }
+
+        .stat-line { padding: 10px 15px; border-bottom: 1px solid rgba(0, 242, 255, 0.1); }
+        .stat-val { font-size: 1.4rem; color: #fff; text-shadow: 0 0 8px var(--neon-blue); }
+
+        #map { flex: 1; border: 1px solid #111; filter: invert(90%) hue-rotate(180deg) brightness(0.9) contrast(1.2); }
+
+        .rtb-box { margin: 15px; padding: 10px; border: 1px solid var(--neon-red); color: var(--neon-red); 
+                  text-align: center; cursor: pointer; animation: blink-slow 2s infinite; font-weight: bold;}
+        .rtb-active { background: var(--neon-red); color: #fff !important; }
+        @keyframes blink-slow { 50% { opacity: 0.4; } }
+
+        /* Status colors */
+        .sys-warn { --neon-blue: #ffaa00 !important; color: #ffaa00 !important; }
+        .sys-crit { --neon-blue: #ff3131 !important; color: #ff3131 !important; }
+
+        @media (max-width: 900px) { .dashboard { grid-template-columns: 1fr; overflow-y: auto; } .panel { height: 350px; } }
     </style>
 </head>
 <body>
     <div class="header">
-        <div style="font-size: 1.5rem; font-weight: bold;">A.R.E.S. OS <span style="font-size:0.8rem; color:var(--safe);">v2.5</span></div>
-        <div id="sys-state">MANUAL SAFE</div>
+        <div class="sys-tag">A.R.E.S. GCS UNIT_01</div>
+        <div id="connection">SAT_LINK: ONLINE</div>
+        <div id="clock">00:00:00</div>
     </div>
-    <div class="dashboard">
+
+    <div class="dashboard" id="main-ui">
+        <!-- LOGISTICS LEFT -->
         <div class="panel">
-            <h2>Command</h2>
-            <div class="data-row"><span class="data-label">Nav Mode</span><span id="nav-mode">MANUAL</span></div>
-            <div class="d-pad-container">
-                <div class="d-pad">
-                    <div class="btn btn-up" onmousedown="drive('F')" onmouseup="drive('S')" ontouchstart="drive('F')" ontouchend="drive('S')">&#9650;</div>
-                    <div class="btn btn-left" onmousedown="drive('L')" onmouseup="drive('S')" ontouchstart="drive('L')" ontouchend="drive('S')">&#9664;</div>
-                    <div class="btn btn-right" onmousedown="drive('R')" onmouseup="drive('S')" ontouchstart="drive('R')" ontouchend="drive('S')">&#9654;</div>
-                    <div class="btn btn-down" onmousedown="drive('B')" onmouseup="drive('S')" ontouchstart="drive('B')" ontouchend="drive('S')">&#9660;</div>
-                </div>
+            <div class="panel-h"><span>LOGISTICS TELEMETRY</span><span>[CH:1]</span></div>
+            <div class="stat-line">
+                <small>BATT VOLTAGE</small><br>
+                <span class="stat-val" id="batt-pct">--%</span> <small id="v-val">(0.0 V)</small>
             </div>
-            <input type="range" min="0" max="255" value="255" class="slider" id="speed-slider" onchange="setSpeed(this.value)">
-            <button id="rtb-toggle" class="rtb-btn" onclick="toggleRTB()">FORCE RTB</button>
-        </div>
-        <div class="panel">
-            <h2>Logistics</h2>
-            <div class="big-data" id="batt-pct">--%</div>
-            <div class="prog-bg"><div class="prog-fill" id="batt-bar"></div></div>
-            <div class="data-row"><span class="data-label">Current</span><span id="current">-- A</span></div>
-            <div class="data-row"><span class="data-label">Dist</span><span id="dist-home">-- m</span></div>
-        </div>
-        <div class="panel">
-            <h2>Spatial</h2>
-            <div class="compass-wrapper">
-                <div class="compass-arrow"></div>
-                <div class="compass-dial" id="compass-dial">
-                    <div class="compass-mark mark-n">N</div>
-                </div>
+            <div class="stat-line">
+                <small>DIST TO ORIGIN</small><br>
+                <span class="stat-val" id="dist-val">-- M</span>
             </div>
-            <div class="scene"><div class="cube" id="mpu-cube"><div class="cube-face face-front">FRONT</div><div class="cube-face face-top">TOP</div></div></div>
+            <div class="stat-line" style="flex: 1; display:flex; flex-direction:column; justify-content:center; text-align:center;">
+                <div class="sys-tag" style="font-size:0.8rem">SYSTEM STATE</div>
+                <div id="sys-mode" style="font-size:1.4rem">NOMINAL</div>
+            </div>
+            <div id="rtb-btn" class="rtb-box" onclick="toggleRTB()">INIT RTB AUTO-RETURN</div>
         </div>
+
+        <!-- CENTER RECON MAP -->
         <div class="panel">
-            <h2>Tactical Map</h2>
+            <div class="panel-h"><span>AERIAL RECON GRID [V_LAYER]</span></div>
             <div id="map"></div>
         </div>
-    </div>
-    <script>
-        var map = L.map('map', { zoomControl: false }).setView([0, 0], 2);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
-        var pathLine = L.polyline([], {color: '#00ffcc'}).addTo(map);
-        var roverMarker = L.circleMarker([0, 0], { color: '#ff0033', radius: 5 }).addTo(map);
 
-        function drive(cmd) { fetch('/control?cmd=' + cmd); }
+        <!-- RIGHT NAVIGATION HUD -->
+        <div class="panel">
+            <div class="panel-h"><span>SPATIAL AWARENESS</span></div>
+            <!-- Drone Axis Attitude Indicator -->
+            <div class="attitude-container">
+                <div class="horizon-inner" id="horizon"></div>
+                <div class="crosshair"></div>
+                <div style="position:absolute; top:5px; width:100%; text-align:center; font-size:0.6rem;">PITCH/ROLL HUD</div>
+            </div>
+
+            <!-- cardinal compass dial -->
+            <div class="compass-box">
+                <div class="compass-dial" id="compass">
+                    <span class="cardinal N">N</span>
+                    <span class="cardinal E">E</span>
+                    <span class="cardinal S">S</span>
+                    <span class="cardinal W">W</span>
+                </div>
+                <div id="head-num" style="position:absolute; font-size:1.2rem; font-weight:bold;">000&deg;</div>
+            </div>
+
+            <div class="panel-h"><span>MANUAL STEER OVERRIDE</span></div>
+            <div class="controls">
+                <div></div><div class="joy-btn" onmousedown="drive('F')" onmouseup="drive('S')" ontouchstart="drive('F')">▲</div><div></div>
+                <div class="joy-btn" onmousedown="drive('L')" onmouseup="drive('S')" ontouchstart="drive('L')">◀</div>
+                <div class="joy-btn" onclick="drive('S')">■</div>
+                <div class="joy-btn" onmousedown="drive('R')" onmouseup="drive('S')" ontouchstart="drive('R')">▶</div>
+                <div></div><div class="joy-btn" onmousedown="drive('B')" onmouseup="drive('S')" ontouchstart="drive('B')">▼</div><div></div>
+            </div>
+        </div>
+
+        <!-- BOTTOM STRIP COORDINATES -->
+        <div class="panel" style="grid-column: span 3; flex-direction:row; padding:10px; align-items:center;">
+            <div style="flex:1"><small>COORD_LAT:</small> <span id="lat-val">0.00000</span></div>
+            <div style="flex:1"><small>COORD_LON:</small> <span id="lon-val">0.00000</span></div>
+            <div style="flex:1"><small>THRUST OUTPUT:</small><input type="range" style="width:100px; margin-left:10px" onchange="setSpeed(this.value)" min="0" max="255" value="255"></div>
+            <div style="flex:1; text-align:right"><small>FUSION_HEARTBEAT:</small> <span id="heart">OFFLINE</span></div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        var map = L.map('map', { zoomControl: false, attributionControl: false }).setView([0, 0], 19);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+        var marker = L.circleMarker([0, 0], { color: '#ff3131', radius: 8, fillOpacity: 0.8 }).addTo(map);
+
+        function drive(c) { fetch('/control?cmd=' + c); }
         function setSpeed(v) { fetch('/speed?val=' + v); }
         function toggleRTB() { fetch('/toggle_rtb'); }
 
-        setInterval(() => {
+        function updateHUD() {
             fetch('/data').then(r => r.json()).then(d => {
-                document.getElementById('batt-pct').innerText = d.batt_pct + '%';
-                document.getElementById('batt-bar').style.width = d.batt_pct + '%';
-                document.getElementById('current').innerText = d.amps.toFixed(2) + ' A';
-                document.getElementById('dist-home').innerText = d.dist_home + ' m';
-                document.getElementById('compass-dial').style.transform = `rotate(${-d.heading}deg)`;
-                document.getElementById('mpu-cube').style.transform = `rotateX(${d.pitch}deg) rotateY(${d.yaw}deg) rotateZ(${d.roll}deg)`;
+                document.getElementById('batt-pct').innerText = d.batt_pct + "%";
+                document.getElementById('v-val').innerText = "(" + d.volts.toFixed(1) + " V)";
+                document.getElementById('dist-val').innerText = d.dist_home + " M";
+                document.getElementById('lat-val').innerText = d.cur_lat.toFixed(6);
+                document.getElementById('lon-val').innerText = d.cur_lon.toFixed(6);
+                document.getElementById('head-num').innerHTML = d.heading + "&deg;";
+                document.getElementById('heart').innerText = "LIVE_TICK";
+
+                // --- MAGNETOMETER UPDATES (Compass Rotate) ---
+                document.getElementById('compass').style.transform = `rotate(${-d.heading}deg)`;
+
+                // --- MPU6050 UPDATES (Attitude Horizon Move) ---
+                // d.pitch normally goes -90 to +90. Map it to Y displacement.
+                // d.roll tilts the plane.
+                let pitchShift = d.pitch * 2; 
+                document.getElementById('horizon').style.transform = `rotate(${d.roll}deg) translateY(${pitchShift}px)`;
+
+                // STATUS STYLING
+                let ui = document.getElementById('main-ui');
+                let modeTxt = document.getElementById('sys-mode');
+                if(d.sys_state == 2) { 
+                    ui.className = "dashboard sys-crit"; modeTxt.innerText = "AUTO-RTB ACTIVE";
+                    document.getElementById('rtb-btn').classList.add('rtb-active');
+                } else if(d.sys_state == 1) {
+                    ui.className = "dashboard sys-warn"; modeTxt.innerText = "LOW POWER WARNING";
+                } else {
+                    ui.className = "dashboard"; modeTxt.innerText = "NOMINAL";
+                    document.getElementById('rtb-btn').classList.remove('rtb-active');
+                }
+
                 if(d.cur_lat != 0) {
-                    let ll = [d.cur_lat, d.cur_lon];
-                    roverMarker.setLatLng(ll);
-                    pathLine.addLatLng(ll);
-                    map.panTo(ll);
+                    let p = [d.cur_lat, d.cur_lon];
+                    marker.setLatLng(p);
+                    map.panTo(p);
                 }
             });
-        }, 200);
+        }
+
+        setInterval(updateHUD, 200);
+        setInterval(() => { document.getElementById('clock').innerText = new Date().toLocaleTimeString(); }, 1000);
     </script>
 </body>
 </html>
+)rawliteral";
 )rawliteral";
 
 void handleDataUpdate() {
