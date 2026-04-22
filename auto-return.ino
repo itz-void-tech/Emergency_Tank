@@ -2,6 +2,16 @@
 #include <WebServer.h>
 #include <TinyGPS++.h>
 #include <HardwareSerial.h>
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_HMC5883_U.h>
+#include <Adafruit_INA219.h>
+#include <Adafruit_Sensor.h>
+
+// --- I2C & Sensors ---
+Adafruit_MPU6050 mpu;
+Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
+Adafruit_INA219 ina219;
 
 // --- AP Mode & Network ---
 const char* ssid = "ARES-Command-Net"; 
@@ -13,33 +23,36 @@ TinyGPSPlus gps;
 HardwareSerial GPS_Serial(2);
 
 // --- Motor Pins ---
-#define ENA 32  // <-- NEW: Connect to ENA on motor driver (remove jumper)
+#define ENA 32  
 #define IN1 25
 #define IN2 26
 #define IN3 27
 #define IN4 14
-#define ENB 33  // <-- NEW: Connect to ENB on motor driver (remove jumper)
+#define ENB 33  
 
-// --- Autonomous Variables ---
-const float BATTERY_CAPACITY_MAH = 3000.0;
-const float ENERGY_COST_PER_METER_MAH = 0.6; 
-const float SAFETY_RESERVE_PERCENT = 15.0; 
-
-double origin_lat = 0.0;
-double origin_lon = 0.0;
+// --- Navigation & Power Variables ---
+double origin_lat = 0, origin_lon = 0, current_lat = 0, current_lon = 0;
 bool origin_saved = false;
-
-double current_lat = 0.0;
-double current_lon = 0.0;
-double dist_to_home = 0.0;
-double bearing_to_home = 0.0;
+double dist_to_home = 0, bearing_to_home = 0;
 
 int sys_state = 0; 
 bool manual_rtb_override = false; 
-int current_speed = 255; // <-- NEW: Global speed variable (0-255)
+int current_speed = 255;
 
-// --- The Dashboard HTML ---
-const char index_html[] PROGMEM = R"rawliteral(
+// --- Sensor Fusion Variables ---
+float roll = 0, pitch = 0, yaw = 0;
+float mag_heading = 0;
+float filter_alpha = 0.96; // Complementary filter coefficient
+unsigned long last_micros;
+
+// --- Battery Logistics ---
+const float BATTERY_CAPACITY_MAH = 3000.0;
+const float ENERGY_COST_PER_METER_MAH = 0.6; 
+const float SAFETY_RESERVE_PERCENT = 15.0;
+float bus_voltage = 0, current_amps = 0;
+
+// [Include the index_html string here as per your original code]
+extern const char index_html[
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -282,13 +295,23 @@ const char index_html[] PROGMEM = R"rawliteral(
     </script>
 </body>
 </html>
-)rawliteral";
+] PROGMEM; 
 
 void setup() {
   Serial.begin(115200);
   GPS_Serial.begin(9600, SERIAL_8N1, 16, 17);
+  Wire.begin(21, 22); // Explicit I2C Pins
 
-  // --- NEW: Setup Motor Pins including ENA/ENB ---
+  // --- Initialize Sensors ---
+  if (!mpu.begin()) Serial.println("MPU6050 Fail");
+  if (!mag.begin()) Serial.println("HMC5883L Fail");
+  if (!ina219.begin()) Serial.println("INA219 Fail");
+
+  // Sensor Config
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+
   pinMode(ENA, OUTPUT); pinMode(ENB, OUTPUT);
   pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
   pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT);
@@ -298,42 +321,56 @@ void setup() {
   stopMotors();
 
   WiFi.softAP(ssid, password);
-  server.on("/", HTTP_GET, []() { server.send(200, "text/html", index_html); });
-  
-  server.on("/control", HTTP_GET, []() {
-    String cmd = server.arg("cmd");
-    if (sys_state != 2) { 
-        if (cmd == "F") driveForward(); else if (cmd == "B") driveBackward();
-        else if (cmd == "L") turnLeft(); else if (cmd == "R") turnRight();
-        else if (cmd == "S") stopMotors();
-    }
-    server.send(200, "text/plain", "OK");
-  });
-
-  // --- NEW: Speed Control Endpoint ---
-  server.on("/speed", HTTP_GET, []() {
-    if(server.hasArg("val")) {
-        current_speed = server.arg("val").toInt();
-        analogWrite(ENA, current_speed); // Apply live speed update to Left Motors
-        analogWrite(ENB, current_speed); // Apply live speed update to Right Motors
-    }
-    server.send(200, "text/plain", "OK");
-  });
-
-  server.on("/toggle_rtb", HTTP_GET, []() {
-    manual_rtb_override = !manual_rtb_override;
-    if(!manual_rtb_override) stopMotors();
-    server.send(200, "text/plain", manual_rtb_override ? "1" : "0");
-  });
-
-  server.on("/data", HTTP_GET, handleDataUpdate);
+  setupWebEndpoints();
   server.begin();
+  last_micros = micros();
 }
 
 void loop() {
   server.handleClient();
-  while (GPS_Serial.available() > 0) gps.encode(GPS_Serial.read());
+  updateSensors();
+  updateGPS();
+  
+  if (sys_state == 2 && origin_saved) executeAutoReturn();
+}
 
+// --- Sensor Fusion Engine ---
+void updateSensors() {
+  sensors_event_t a, g, temp, m;
+  mpu.getEvent(&a, &g, &temp);
+  mag.getEvent(&m);
+
+  unsigned long now = micros();
+  float dt = (now - last_micros) / 1000000.0;
+  last_micros = now;
+
+  // 1. Roll & Pitch from Accelerometer
+  float roll_acc = atan2(a.acceleration.y, a.acceleration.z) * 180 / PI;
+  float pitch_acc = atan2(-a.acceleration.x, sqrt(a.acceleration.y * a.acceleration.y + a.acceleration.z * a.acceleration.z)) * 180 / PI;
+
+  // 2. Complementary Filter (Fusion)
+  roll = filter_alpha * (roll + g.gyro.x * dt * 180 / PI) + (1 - filter_alpha) * roll_acc;
+  pitch = filter_alpha * (pitch + g.gyro.y * dt * 180 / PI) + (1 - filter_alpha) * pitch_acc;
+
+  // 3. Tilt-Compensated Heading (Yaw)
+  float phi = roll * PI / 180;
+  float theta = pitch * PI / 180;
+
+  // Flatten magnetometer readings against the horizon
+  float Xh = m.magnetic.x * cos(theta) + m.magnetic.z * sin(theta);
+  float Yh = m.magnetic.x * sin(phi) * sin(theta) + m.magnetic.y * cos(phi) - m.magnetic.z * sin(phi) * cos(theta);
+  
+  mag_heading = atan2(Yh, Xh) * 180 / PI;
+  if (mag_heading < 0) mag_heading += 360;
+
+  // 4. Power Metrics
+  bus_voltage = ina219.getBusVoltage_V();
+  current_amps = ina219.getCurrent_mA() / 1000.0;
+  if (current_amps < 0) current_amps = 0; 
+}
+
+void updateGPS() {
+  while (GPS_Serial.available() > 0) gps.encode(GPS_Serial.read());
   if (gps.location.isValid() && !origin_saved && gps.satellites.value() > 4) {
     origin_lat = gps.location.lat(); origin_lon = gps.location.lng(); origin_saved = true;
   }
@@ -344,38 +381,16 @@ void loop() {
       bearing_to_home = gps.courseTo(current_lat, current_lon, origin_lat, origin_lon);
     }
   }
-
-  if (sys_state == 2 && origin_saved) executeAutoReturn();
 }
-
-void executeAutoReturn() {
-  if (dist_to_home < 3.0) { stopMotors(); manual_rtb_override = false; return; }
-  float current_heading = 0.0; 
-  float heading_error = bearing_to_home - current_heading;
-  if (heading_error > 180) heading_error -= 360; if (heading_error < -180) heading_error += 360;
-  
-  // Optional: Set a specific autonomous speed here by writing to ENA/ENB temporarily
-  if (heading_error > 15) turnRight(); else if (heading_error < -15) turnLeft(); else driveForward(); 
-}
-
-void driveForward() { digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW); digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW); }
-void driveBackward() { digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH); digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH); }
-void turnRight() { digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW); digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH); }
-void turnLeft() { digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH); digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW); }
-void stopMotors() { digitalWrite(IN1, LOW); digitalWrite(IN2, LOW); digitalWrite(IN3, LOW); digitalWrite(IN4, LOW); }
 
 void handleDataUpdate() {
-  float volts = 7.4; float amps = 1.5; int batt_pct = 85; 
+  // Logic for Battery Percentage based on LiPo 2S voltage (8.4V full, 6.8V empty)
+  int batt_pct = map(constrain(bus_voltage * 100, 680, 840), 680, 840, 0, 100);
   
-  int sim_heading = millis() / 50 % 360; 
-  int sim_roll = (millis() / 30 % 40) - 20; 
-  int sim_pitch = (millis() / 40 % 30) - 15;
-  int sim_yaw = millis() / 60 % 360;
-
   float remaining_mah = (batt_pct / 100.0) * BATTERY_CAPACITY_MAH;
-  int runtime_min = (amps > 0) ? (int)((remaining_mah / (amps * 1000.0)) * 60) : 0;
+  int runtime_min = (current_amps > 0.05) ? (int)((remaining_mah / (current_amps * 1000.0)) * 60) : 999;
   int return_cost_mah = dist_to_home * ENERGY_COST_PER_METER_MAH;
-  float safety_margin = 100.0 - ((return_cost_mah / remaining_mah) * 100.0);
+  float safety_margin = 100.0 - ((float)return_cost_mah / remaining_mah * 100.0);
   int max_safe_radius = (int)((remaining_mah - (BATTERY_CAPACITY_MAH * (SAFETY_RESERVE_PERCENT/100.0))) / ENERGY_COST_PER_METER_MAH);
 
   if (manual_rtb_override || safety_margin < 10.0 || batt_pct <= SAFETY_RESERVE_PERCENT) sys_state = 2; 
@@ -384,27 +399,64 @@ void handleDataUpdate() {
 
   String json = "{";
   json += "\"batt_pct\":" + String(batt_pct) + ",";
-  json += "\"amps\":" + String(amps, 2) + ",";
+  json += "\"amps\":" + String(current_amps, 2) + ",";
   json += "\"runtime_min\":" + String(runtime_min) + ",";
   json += "\"dist_home\":" + String((int)dist_to_home) + ",";
   json += "\"return_cost\":" + String(return_cost_mah) + ",";
   json += "\"safety_margin\":" + String(safety_margin, 1) + ",";
   json += "\"max_radius\":" + String(max_safe_radius) + ",";
   json += "\"sys_state\":" + String(sys_state) + ",";
-  json += "\"manual_rtb\":" + String(manual_rtb_override ? 1 : 0) + ",";
-  
-  json += "\"heading\":" + String(sim_heading) + ",";
-  json += "\"roll\":" + String(sim_roll) + ",";
-  json += "\"pitch\":" + String(sim_pitch) + ",";
-  json += "\"yaw\":" + String(sim_yaw) + ",";
-
+  json += "\"heading\":" + String((int)mag_heading) + ",";
+  json += "\"roll\":" + String((int)roll) + ",";
+  json += "\"pitch\":" + String((int)pitch) + ",";
+  json += "\"yaw\":" + String((int)mag_heading) + ","; // Yaw synced to mag heading
   json += "\"sats\":" + String(gps.satellites.value()) + ",";
   json += "\"cur_lat\":" + String(current_lat, 6) + ",";
   json += "\"cur_lon\":" + String(current_lon, 6) + ",";
-  json += "\"origin_saved\":" + String(origin_saved ? "true" : "false") + ",";
+  json += "\"origin_saved\":" + (origin_saved ? String("true") : String("false")) + ",";
   json += "\"origin_lat\":" + String(origin_lat, 6) + ",";
   json += "\"origin_lon\":" + String(origin_lon, 6);
   json += "}";
 
   server.send(200, "application/json", json);
+}
+
+// --- Rest of Motor Functions and Web Endpoints ---
+void setupWebEndpoints() {
+  server.on("/", HTTP_GET, []() { server.send(200, "text/html", index_html); });
+  server.on("/control", HTTP_GET, []() {
+    String cmd = server.arg("cmd");
+    if (sys_state != 2) { 
+        if (cmd == "F") driveForward(); else if (cmd == "B") driveBackward();
+        else if (cmd == "L") turnLeft(); else if (cmd == "R") turnRight();
+        else if (cmd == "S") stopMotors();
+    }
+    server.send(200, "text/plain", "OK");
+  });
+  server.on("/speed", HTTP_GET, []() {
+    if(server.hasArg("val")) {
+        current_speed = server.arg("val").toInt();
+        analogWrite(ENA, current_speed); analogWrite(ENB, current_speed);
+    }
+    server.send(200, "text/plain", "OK");
+  });
+  server.on("/toggle_rtb", HTTP_GET, []() {
+    manual_rtb_override = !manual_rtb_override;
+    if(!manual_rtb_override) stopMotors();
+    server.send(200, "text/plain", manual_rtb_override ? "1" : "0");
+  });
+  server.on("/data", HTTP_GET, handleDataUpdate);
+}
+
+void driveForward() { digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW); digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW); }
+void driveBackward() { digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH); digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH); }
+void turnRight() { digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW); digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH); }
+void turnLeft() { digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH); digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW); }
+void stopMotors() { digitalWrite(IN1, LOW); digitalWrite(IN2, LOW); digitalWrite(IN3, LOW); digitalWrite(IN4, LOW); }
+
+void executeAutoReturn() {
+  if (dist_to_home < 3.0) { stopMotors(); manual_rtb_override = false; return; }
+  float heading_error = bearing_to_home - mag_heading;
+  if (heading_error > 180) heading_error -= 360; if (heading_error < -180) heading_error += 360;
+  if (heading_error > 15) turnRight(); else if (heading_error < -15) turnLeft(); else driveForward(); 
 }
