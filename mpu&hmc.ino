@@ -11,45 +11,33 @@ Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
 WebServer server(80);
 
 // --- Network Settings ---
-const char* ssid = "ESP32-SPATIAL-HUD"; 
+const char* ssid = "ARES-PRECISION-COMPASS"; 
 const char* password = "password123"; 
 
-// --- Calibration & Fusion Variables ---
+// --- Sensor Variables ---
 float gyroX_off = 0, gyroY_off = 0, gyroZ_off = 0;
 float roll = 0, pitch = 0, yaw = 0;
 bool is_calibrating = false;
-int calibration_progress = 0;
 unsigned long last_micros = 0;
-
-// ==========================================
-//   CALIBRATION & SENSOR LOGIC
-// ==========================================
 
 void calibrateSensors() {
   is_calibrating = true;
   float gx = 0, gy = 0, gz = 0;
-  const int samples = 150;
-
-  for (int i = 0; i < samples; i++) {
+  for (int i = 0; i < 150; i++) {
     sensors_event_t a, g, temp;
     mpu.getEvent(&a, &g, &temp);
-    gx += g.gyro.x; 
-    gy += g.gyro.y; 
-    gz += g.gyro.z;
-    calibration_progress = map(i, 0, samples - 1, 0, 100);
+    gx += g.gyro.x; gy += g.gyro.y; gz += g.gyro.z;
     server.handleClient(); 
-    delay(20); 
+    delay(15); 
   }
-
-  gyroX_off = gx / samples;
-  gyroY_off = gy / samples;
-  gyroZ_off = gz / samples;
+  gyroX_off = gx / 150.0;
+  gyroY_off = gy / 150.0;
+  gyroZ_off = gz / 150.0;
   is_calibrating = false;
 }
 
 void updateSensors() {
   if (is_calibrating) return;
-
   sensors_event_t a, g, temp, m;
   mpu.getEvent(&a, &g, &temp);
   mag.getEvent(&m);
@@ -59,14 +47,12 @@ void updateSensors() {
   if (dt <= 0 || dt > 0.5) dt = 0.01;
   last_micros = now;
 
-  // 1. Roll & Pitch (Complementary Filter)
   float roll_acc = atan2(a.acceleration.y, a.acceleration.z) * 180 / PI;
   float pitch_acc = atan2(-a.acceleration.x, sqrt(a.acceleration.y * a.acceleration.y + a.acceleration.z * a.acceleration.z)) * 180 / PI;
 
   roll = 0.96 * (roll + (g.gyro.x - gyroX_off) * dt * 180 / PI) + 0.04 * roll_acc;
   pitch = 0.96 * (pitch + (g.gyro.y - gyroY_off) * dt * 180 / PI) + 0.04 * pitch_acc;
 
-  // 2. Tilt-Compensated Heading
   float phi = roll * PI / 180;
   float theta = pitch * PI / 180;
   float Xh = m.magnetic.x * cos(theta) + m.magnetic.z * sin(theta);
@@ -76,121 +62,130 @@ void updateSensors() {
   if (yaw < 0) yaw += 360;
 }
 
-// ==========================================
-//   WEB INTERFACE (HTML/CSS/JS)
-// ==========================================
-
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE html><html><head>
-<title>SPATIAL HUD</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-    :root { --neon: #00f2ff; --bg: #05080a; }
-    body { background: var(--bg); color: var(--neon); font-family: monospace; display: flex; flex-direction: column; align-items: center; text-transform: uppercase; margin: 0; padding: 20px; }
-    .hud-box { background: #0d141a; border: 1px solid #1a2c38; border-top: 4px solid var(--neon); padding: 30px; border-radius: 5px; box-shadow: 0 0 20px rgba(0,242,255,0.2); text-align: center; position: relative; }
+    body { background: #000; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin: 0; padding-top: 20px; }
     
-    /* Calibration Overlay */
-    #overlay { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 100; flex-direction: column; align-items: center; justify-content: center; }
-    .progress-box { width: 80%; height: 10px; background: #111; border: 1px solid var(--neon); margin: 15px 0; }
-    #bar { width: 0%; height: 100%; background: var(--neon); }
+    .hud-header { font-size: 2em; font-weight: bold; margin-bottom: 5px; color: #fff; }
+    .hud-sub { font-size: 1.2em; color: #ff3131; margin-bottom: 20px; }
 
-    /* Spatial Axis Oval */
-    .axis-container { width: 220px; height: 110px; border: 2px solid var(--neon); border-radius: 50%; position: relative; overflow: hidden; background: #000; margin: 0 auto 30px auto; }
-    #horizon-line { width: 400px; height: 2px; background: var(--neon); position: absolute; top: 50%; left: -90px; transition: 0.1s linear; }
-    .fixed-ref { width: 60px; height: 3px; background: #ff3131; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 5; }
+    /* Main Compass Container */
+    .compass-container {
+        position: relative; width: 320px; height: 320px;
+        display: flex; align-items: center; justify-content: center;
+    }
 
-    /* Compass Ring */
-    .compass-wrap { position: relative; width: 180px; height: 180px; margin: auto; }
-    #markers { transition: 0.1s linear; transform-origin: center; }
-    .heading-display { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 1.8em; font-weight: bold; text-shadow: 0 0 10px var(--neon); }
-    
-    button { background: transparent; border: 1px solid var(--neon); color: var(--neon); padding: 10px; cursor: pointer; margin-top: 20px; font-family: inherit; width: 100%; }
+    /* Fixed Red Pointer at Top */
+    .top-pointer {
+        position: absolute; top: -10px; width: 20px; height: 30px;
+        background: #ff0000; clip-path: polygon(50% 100%, 0 0, 100% 0);
+        z-index: 10;
+    }
+
+    /* The Rotating Dial */
+    #compass-dial {
+        width: 300px; height: 300px;
+        transition: transform 0.1s linear;
+    }
+
+    /* Horizon Oval */
+    .horizon-box {
+        width: 200px; height: 80px; border: 1px solid #333;
+        border-radius: 50%; margin-top: 30px; position: relative; overflow: hidden;
+    }
+    #horizon-line {
+        width: 400px; height: 2px; background: #00f2ff;
+        position: absolute; top: 50%; left: -100px;
+    }
+
+    button { 
+        margin-top: 30px; background: #222; border: 1px solid #444; 
+        color: #888; padding: 10px 20px; cursor: pointer; border-radius: 5px;
+    }
 </style>
 </head><body>
 
-<div class="hud-box">
-    <div id="overlay">
-        <span>CALIBRATING...</span>
-        <div class="progress-box"><div id="bar"></div></div>
-    </div>
+    <div class="hud-header" id="deg-text">0°</div>
+    <div class="hud-sub">NORTH</div>
 
-    <h2>SPATIAL HUD</h2>
-
-    <div class="axis-container">
-        <div class="fixed-ref"></div>
-        <div id="horizon-line"></div>
-    </div>
-
-    <div class="compass-wrap">
-        <div class="heading-display" id="y-val">000°</div>
-        <svg viewBox="0 0 160 160">
-            <circle cx="80" cy="80" r="78" fill="none" stroke="#1a2c38" stroke-width="1" stroke-dasharray="4,4" />
-            <g id="markers">
-                <text x="80" y="25" fill="#ff3131" text-anchor="middle" font-weight="bold">N</text>
-                <text x="140" y="85" fill="white" text-anchor="middle">E</text>
-                <text x="80" y="145" fill="white" text-anchor="middle">S</text>
-                <text x="20" y="85" fill="white" text-anchor="middle">W</text>
+    <div class="compass-container">
+        <div class="top-pointer"></div>
+        <svg id="compass-dial" viewBox="0 0 200 200">
+            <circle cx="100" cy="100" r="95" fill="none" stroke="#333" stroke-width="1"/>
+            
+            <g id="ticks" stroke="#fff" stroke-width="1">
+                <line x1="100" y1="10" x2="100" y2="20" transform="rotate(0, 100, 100)" />
+                <line x1="100" y1="10" x2="100" y2="15" transform="rotate(30, 100, 100)" />
+                <line x1="100" y1="10" x2="100" y2="15" transform="rotate(60, 100, 100)" />
+                <line x1="100" y1="10" x2="100" y2="20" transform="rotate(90, 100, 100)" />
+                <line x1="100" y1="10" x2="100" y2="15" transform="rotate(120, 100, 100)" />
+                <line x1="100" y1="10" x2="100" y2="15" transform="rotate(150, 100, 100)" />
+                <line x1="100" y1="10" x2="100" y2="20" transform="rotate(180, 100, 100)" />
+                <line x1="100" y1="10" x2="100" y2="15" transform="rotate(210, 100, 100)" />
+                <line x1="100" y1="10" x2="100" y2="15" transform="rotate(240, 100, 100)" />
+                <line x1="100" y1="10" x2="100" y2="20" transform="rotate(270, 100, 100)" />
+                <line x1="100" y1="10" x2="100" y2="15" transform="rotate(300, 100, 100)" />
+                <line x1="100" y1="10" x2="100" y2="15" transform="rotate(330, 100, 100)" />
             </g>
+
+            <g fill="#fff" font-family="Arial" font-weight="bold" text-anchor="middle">
+                <text x="100" y="40" fill="#ff3131" font-size="24">N</text>
+                <text x="165" y="108" font-size="20">E</text>
+                <text x="100" y="175" font-size="20">S</text>
+                <text x="35" y="108" font-size="20">W</text>
+                
+                <text x="145" y="60" fill="#888" font-size="10">NE</text>
+                <text x="145" y="150" fill="#888" font-size="10">SE</text>
+                <text x="55" y="150" fill="#888" font-size="10">SW</text>
+                <text x="55" y="60" fill="#888" font-size="10">NW</text>
+            </g>
+
+            <polygon points="100,70 105,95 130,100 105,105 100,130 95,105 70,100 95,95" fill="#111" stroke="#333" stroke-width="1"/>
         </svg>
     </div>
 
-    <button onclick="startCal()">RECALIBRATE IMU</button>
-</div>
+    <div class="horizon-box">
+        <div id="horizon-line"></div>
+    </div>
+
+    <button onclick="fetch('/start_cal')">CALIBRATE SENSORS</button>
 
 <script>
-    function startCal() { fetch('/start_cal'); }
+    function getCardinal(angle) {
+        const directions = ["NORTH", "NE", "EAST", "SE", "SOUTH", "SW", "WEST", "NW"];
+        return directions[Math.round(angle / 45) % 8];
+    }
 
     setInterval(() => {
         fetch('/data').then(r => r.json()).then(d => {
-            if(d.is_cal) {
-                document.getElementById('overlay').style.display = 'flex';
-                document.getElementById('bar').style.width = d.prog + "%";
-            } else {
-                document.getElementById('overlay').style.display = 'none';
-                // Update Compass
-                document.getElementById('markers').style.transform = `rotate(${-d.yaw}deg)`;
-                document.getElementById('y-val').innerText = Math.round(d.yaw).toString().padStart(3, '0') + '°';
-                // Update Horizon (Roll and Pitch)
-                document.getElementById('horizon-line').style.transform = `rotate(${d.roll}deg) translateY(${d.pitch}px)`;
-            }
+            // Rotate the entire dial based on yaw
+            document.getElementById('compass-dial').style.transform = `rotate(${-d.yaw}deg)`;
+            document.getElementById('deg-text').innerText = Math.round(d.yaw) + "°";
+            document.querySelector('.hud-sub').innerText = getCardinal(d.yaw);
+            
+            // Update Horizon (Pitch/Roll)
+            document.getElementById('horizon-line').style.transform = `rotate(${d.roll}deg) translateY(${d.pitch}px)`;
         });
     }, 100);
 </script>
 </body></html>
 )rawliteral";
 
-// ==========================================
-//   SERVER HANDLERS & SETUP
-// ==========================================
-
-void handleData() {
-  String json = "{";
-  json += "\"is_cal\":" + String(is_calibrating ? "true" : "false") + ",";
-  json += "\"prog\":" + String(calibration_progress) + ",";
-  json += "\"roll\":" + String((int)roll) + ",";
-  json += "\"pitch\":" + String((int)pitch) + ",";
-  json += "\"yaw\":" + String((int)yaw);
-  json += "}";
-  server.send(200, "application/json", json);
-}
-
 void setup() {
   Serial.begin(115200);
-  Wire.begin(21, 22); // Standard SDA/SCL for ESP32
-  
-  if(!mpu.begin()) Serial.println("MPU FAIL");
-  if(!mag.begin()) Serial.println("HMC FAIL");
-
+  Wire.begin(21, 22);
+  mpu.begin();
+  mag.begin();
   calibrateSensors();
   WiFi.softAP(ssid, password);
-  
   server.on("/", []() { server.send(200, "text/html", index_html); });
-  server.on("/data", handleData);
-  server.on("/start_cal", []() {
-    server.send(200, "text/plain", "OK");
-    calibrateSensors();
+  server.on("/data", [](){
+    String json = "{\"roll\":" + String((int)roll) + ",\"pitch\":" + String((int)pitch) + ",\"yaw\":" + String((int)yaw) + "}";
+    server.send(200, "application/json", json);
   });
-  
+  server.on("/start_cal", []() { server.send(200, "text/plain", "OK"); calibrateSensors(); });
   server.begin();
   last_micros = micros();
 }
