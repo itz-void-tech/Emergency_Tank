@@ -3,7 +3,7 @@
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_MPU6050.h>
-#include <Adafruit_HMC5883_U.h>
+#include <QMC5883LCompass.h>
 #include <TinyGPSPlus.h>
 #include <HardwareSerial.h>
 
@@ -14,7 +14,7 @@ WebServer server(80);
 
 // Sensors
 Adafruit_MPU6050 mpu;
-Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
+QMC5883LCompass mag;
 TinyGPSPlus gps;
 HardwareSerial GPS_Serial(2); // RX2: 16, TX2: 17
 
@@ -96,11 +96,10 @@ void updateSensors() {
   mpu.getEvent(&a, &g, &temp);
   temperature = temp.temperature;
   
-  sensors_event_t m;
-  mag.getEvent(&m);
-  float mx = m.magnetic.x;
-  float my = m.magnetic.y;
-  float mz = m.magnetic.z;
+  mag.read();
+  float mx = mag.getX();
+  float my = mag.getY();
+  float mz = mag.getZ();
 
   unsigned long now = micros();
   float dt = (now - last_micros) / 1000000.0;
@@ -207,7 +206,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 
         <!-- Compass Card -->
         <div class="card">
-            <h2>HMC5883L Compass</h2>
+            <h2>QMC5883L Compass</h2>
             <div class="compass-container">
                 <div class="compass-markers">
                     <div class="marker marker-n">N</div>
@@ -378,12 +377,9 @@ void setup() {
     Serial.println("MPU6050 ready.");
   }
 
-  Serial.println("Initializing HMC5883L...");
-  if (!mag.begin()) {
-    Serial.println("Failed to find HMC5883L chip.");
-  } else {
-    Serial.println("HMC5883L ready.");
-  }
+  Serial.println("Initializing QMC5883L...");
+  mag.init();
+  Serial.println("QMC5883L ready.");
 
   // Connect to Wi-Fi
   Serial.print("Connecting to Wi-Fi: ");
