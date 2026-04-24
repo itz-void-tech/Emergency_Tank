@@ -313,19 +313,10 @@ void setup() {
   Serial.println("\nWiFi connected. IP: ");
   Serial.println(WiFi.localIP());
 
-  // --- NTP Time Sync (Required for Telegram HTTPS certificates) ---
-  Serial.print("Syncing time for Telegram...");
-  configTime(0, 0, "pool.ntp.org");
-  time_t now = time(nullptr);
-  while (now < 24 * 3600) {
-    delay(500);
-    Serial.print(".");
-    now = time(nullptr);
-  }
-  Serial.println(" Time Synced!");
-
   // Telegram secure client setup
-  secured_client.setCACert(TELEGRAM_CERTIFICATE_ROOT); // Required for ESP32
+  // By using setInsecure(), we BYPASS the need for NTP time sync completely!
+  // This makes Telegram connect instantly (0 seconds delay).
+  secured_client.setInsecure();
 
   server.on("/", HTTP_GET, []() {
     server.send(200, "text/html", index_html);
@@ -372,6 +363,8 @@ void loop() {
 
 // --- FreeRTOS Task for Telegram ---
 void telegramTask(void *pvParameters) {
+  Serial.println("\nTelegram Task Started. Bot is online instantly.");
+
   for (;;) {
     if (millis() - bot_lasttime > BOT_MTBS) {
       int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
